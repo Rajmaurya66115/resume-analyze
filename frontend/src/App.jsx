@@ -1,369 +1,288 @@
 import React, { useState, useEffect } from 'react';
-import AuthModal from './AuthModal';
-import PurchaseModal from './PurchaseModal';
-import ScanHistory from './ScanHistory';
-import { getAuthToken, setAuthToken, fetchCurrentUser, analyzeResume } from './api';
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(getAuthToken());
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [isPurchaseOpen, setIsPurchaseOpen] = useState(false);
-
-  // Intake Form State
   const [file, setFile] = useState(null);
   const [jobDescription, setJobDescription] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [analysisResult, setAnalysisResult] = useState(null);
-  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const [isScanning, setIsScanning] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
 
-  // Restore authenticated session
-  useEffect(() => {
+  // Dynamic Token & History States
+  const [tokens, setTokens] = useState(10);
+  const [history, setHistory] = useState([]);
+  const [user, setUser] = useState(null);
+
+  // 1. Persistent Device Fingerprint Identifier
+  const getDeviceId = () => {
+    let id = localStorage.getItem('x_device_id');
+    if (!id) {
+      id = 'dev_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+      localStorage.setItem('x_device_id', id);
+    }
+    return id;
+  };
+
+  // Helper: Request Headers with Auth + Device ID
+  const getHeaders = () => {
+    const headers = {
+      'x-device-id': getDeviceId(),
+    };
+    const token = localStorage.getItem('token');
     if (token) {
-      fetchCurrentUser()
-        .then((userData) => {
-          if (userData) setUser(userData);
-        })
-        .catch(() => {
-          setAuthToken(null);
-          setUser(null);
-        });
+      headers['Authorization'] = `Bearer ${token}`;
     }
-  }, [token]);
+    return headers;
+  };
 
-  // Handle GitHub OAuth redirect with code in URL query params
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (code) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-      fetch('/api/auth/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.token) {
-            setAuthToken(data.token);
-            setToken(data.token);
-            setUser(data.user);
-          }
-        })
-        .catch(console.error);
+  // 2. Fetch Live Token Balance from MongoDB
+  const fetchTokens = async () => {
+    try {
+      const res = await fetch('/api/analyze/tokens', {
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok && typeof data.tokens === 'number') {
+        setTokens(data.tokens);
+      }
+    } catch (err) {
+      console.error('Failed to sync tokens:', err);
     }
+  };
+
+  // 3. Fetch Analysis History from MongoDB
+  const fetchHistory = async () => {
+    try {
+      const res = await fetch('/api/analyze/history', {
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && Array.isArray(data.history)) {
+        setHistory(data.history);
+      }
+    } catch (err) {
+      console.error('Failed to load history:', err);
+    }
+  };
+
+  // 4. Initial Load
+  useEffect(() => {
+    fetchTokens();
+    fetchHistory();
   }, []);
 
-  const handleLogout = () => {
-    setAuthToken(null);
-    setToken(null);
-    setUser(null);
-  };
-
-  const handleAuthSuccess = (data) => {
-    if (data?.token) {
-      setAuthToken(data.token);
-      setToken(data.token);
-    }
-    fetchCurrentUser().then(setUser);
-  };
-
-  const handlePurchaseSuccess = (updatedData) => {
-    setUser((prev) => ({
-      ...prev,
-      tokenBalance: updatedData.tokenBalance,
-      plan: updatedData.plan,
-    }));
-  };
-
-  const handleRunAnalysis = async (e) => {
+  // 5. Scan Submission
+  const handleAnalyze = async (e) => {
     e.preventDefault();
-    setError('');
-
     if (!file) {
-      setError('Please upload a resume file (PDF or DOCX).');
+      setError('Please upload a resume file (PDF/DOCX).');
       return;
     }
     if (!jobDescription.trim()) {
-      setError('Please provide a target job description to match against.');
+      setError('Please paste a job description.');
       return;
     }
 
-    setLoading(true);
-    setAnalysisResult(null);
+    setIsScanning(true);
+    setError(null);
+
+    const formData = new FormData();
+    formData.append('resume', file);
+    formData.append('jobDescription', jobDescription);
 
     try {
-      const result = await analyzeResume(file, jobDescription);
-      setAnalysisResult(result);
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: formData,
+      });
 
-      // Trigger history list re-fetch immediately
-      setHistoryRefreshKey((prev) => prev + 1);
+      const data = await res.json();
 
-      // Sync user token balance with server response or decrement locally
-      if (result.remainingTokens !== undefined && result.remainingTokens !== null) {
-        setUser((prev) => prev ? { ...prev, tokenBalance: result.remainingTokens } : null);
-      } else if (user && user.plan !== 'unlimited') {
-        setUser((prev) => ({ ...prev, tokenBalance: Math.max(0, prev.tokenBalance - 1) }));
+      if (!res.ok) {
+        throw new Error(data.message || 'Error processing resume.');
       }
-    } catch (err) {
-      // Auto-trigger the pricing modal on 402 Insufficient Balance
-      if (err.message?.includes('402') || err.status === 402 || err.response?.status === 402) {
-        setIsPurchaseOpen(true);
-        setError('Token balance exhausted. Please buy more tokens to run scans.');
+
+      setResult(data);
+
+      // Decrement token count in UI
+      if (typeof data.remainingTokens === 'number') {
+        setTokens(data.remainingTokens);
       } else {
-        setError(err.message || 'Error processing resume.');
+        fetchTokens();
       }
+
+      // Refresh history list immediately
+      fetchHistory();
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setLoading(false);
+      setIsScanning(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-100 selection:text-emerald-900">
-      {/* Top Navigation Bar */}
-      <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white font-black flex items-center justify-center text-lg shadow-md shadow-emerald-500/20">
-            R
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      {/* Top Navbar */}
+      <header className="border-b bg-white">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="bg-emerald-600 text-white font-black text-xl px-2.5 py-1 rounded-md">R</span>
+            <span className="font-bold text-xl tracking-tight">ResumeReview</span>
+            <span className="text-xs bg-emerald-100 text-emerald-800 font-semibold px-2 py-0.5 rounded">ATS AI</span>
           </div>
-          <div className="flex items-center">
-            <span className="font-extrabold text-lg tracking-tight text-slate-800">ResumeReview</span>
-            <span className="text-xs bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded ml-2">ATS AI</span>
-          </div>
-        </div>
 
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-2 bg-emerald-50/80 border border-emerald-200 px-3 py-1.5 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-xs font-bold text-emerald-800">
-              {user ? `${user.tokenBalance} Tokens` : 'Guest Mode (10 Free)'}
+          <div className="flex items-center gap-3">
+            {/* Dynamic Token Badge */}
+            <span className="px-3 py-1 bg-emerald-50 text-emerald-700 text-sm font-medium rounded-full border border-emerald-200 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              {user ? `Tokens: ${tokens}` : `Guest Mode (${tokens} Free)`}
             </span>
-          </div>
 
-          <button
-            onClick={() => setIsPurchaseOpen(true)}
-            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-sm transition"
-          >
-            Upgrade / Tokens
-          </button>
-
-          {user ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs sm:text-sm font-medium text-slate-600 hidden md:inline">
-                {user.email}
-              </span>
-              <button
-                onClick={handleLogout}
-                className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 rounded-lg text-xs font-medium text-slate-700 transition"
-              >
-                Sign Out
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setIsAuthOpen(true)}
-              className="px-3.5 py-1.5 border border-slate-300 hover:bg-slate-100 rounded-lg text-xs sm:text-sm font-medium text-slate-700 transition"
-            >
+            <button className="bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium px-4 py-1.5 rounded-md transition">
+              Upgrade / Tokens
+            </button>
+            <button className="text-sm font-medium border border-slate-300 hover:bg-slate-100 px-4 py-1.5 rounded-md transition">
               Sign In
             </button>
-          )}
+          </div>
         </div>
-      </nav>
+      </header>
 
-      {/* Main Content View */}
-      <main className="max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 flex-1 flex flex-col gap-8">
-        <section className="text-center max-w-2xl mx-auto pt-4">
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
+      {/* Main Content */}
+      <main className="max-w-4xl mx-auto px-4 py-12">
+        <div className="text-center mb-10">
+          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 mb-3">
             Match Your Resume to Any Job in Seconds
           </h1>
-          <p className="mt-3 text-slate-600 text-sm sm:text-base leading-relaxed">
-            Scan your resume against employer requirements. Uncover missing industry keywords, formatting errors, and algorithmic match scores before submitting.
+          <p className="text-slate-600 max-w-xl mx-auto text-sm sm:text-base">
+            Scan your resume against employer requirements. Uncover missing industry keywords,
+            formatting errors, and algorithmic match scores before submitting.
           </p>
-        </section>
+        </div>
 
-        {/* Input Intake Panel */}
-        <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm">
-          {error && (
-            <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-medium">
-              {error}
-            </div>
-          )}
+        {/* Error Alert */}
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
 
+        {/* Upload Form */}
+        <form onSubmit={handleAnalyze} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-10">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* File Upload Zone */}
-            <div className="flex flex-col">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+            {/* 1. Resume File */}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                 1. Upload Resume
               </label>
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (e.dataTransfer.files?.[0]) setFile(e.dataTransfer.files[0]);
-                }}
-                className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center gap-3 transition min-h-[180px] ${
-                  file ? 'border-emerald-500 bg-emerald-50/20' : 'border-slate-300 hover:border-slate-400 bg-slate-50/50'
-                }`}
-              >
-                <div className="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-xl text-slate-600">
-                  📄
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800 truncate max-w-xs">
-                    {file ? file.name : 'Drop resume file here'}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-0.5">Supports PDF and DOCX up to 5MB</p>
-                </div>
-                <label className="cursor-pointer px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold shadow-sm transition">
-                  Browse File
-                  <input
-                    type="file"
-                    accept=".pdf,.docx"
-                    className="hidden"
-                    onChange={(e) => e.target.files?.[0] && setFile(e.target.files[0])}
-                  />
+              <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center hover:border-emerald-500 transition">
+                <input
+                  type="file"
+                  id="resumeUpload"
+                  accept=".pdf,.docx,.txt"
+                  className="hidden"
+                  onChange={(e) => setFile(e.target.files[0])}
+                />
+                <label htmlFor="resumeUpload" className="cursor-pointer flex flex-col items-center">
+                  <span className="text-2xl mb-1">📄</span>
+                  <span className="text-sm font-medium text-slate-700">
+                    {file ? file.name : 'Browse File'}
+                  </span>
+                  <span className="text-xs text-slate-400 mt-1">Supports PDF up to 5MB</span>
                 </label>
               </div>
             </div>
 
-            {/* Target Job Description Input */}
-            <div className="flex flex-col">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+            {/* 2. Job Description */}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                 2. Job Description
               </label>
               <textarea
-                rows={7}
+                rows={5}
                 value={jobDescription}
                 onChange={(e) => setJobDescription(e.target.value)}
-                placeholder="Paste the target job requirements, tech stack, and qualifications here..."
-                className="w-full p-3.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none resize-none font-mono text-slate-700 leading-relaxed"
+                placeholder="Paste the target job description or key requirements here..."
+                className="w-full text-sm border border-slate-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
           </div>
 
-          <div className="mt-8 flex justify-center">
+          <div className="mt-6 flex justify-end">
             <button
-              onClick={handleRunAnalysis}
-              disabled={loading}
-              className="w-full sm:w-auto px-8 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-lg transition transform active:scale-98 disabled:opacity-50 flex items-center justify-center gap-2"
+              type="submit"
+              disabled={isScanning}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-6 py-2.5 rounded-lg transition disabled:opacity-50"
             >
-              {loading ? (
-                <>
-                  <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                  Parsing & Scoring Resume...
-                </>
-              ) : (
-                'Run ATS Compatibility Scan'
-              )}
+              {isScanning ? 'Analyzing ATS Match...' : 'Run ATS Compatibility Scan'}
             </button>
           </div>
-        </section>
+        </form>
 
-        {/* Diagnostic Results Card */}
-        {analysisResult && (
-          <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm flex flex-col gap-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <h2 className="text-xl font-bold text-slate-800">
-                Diagnostic Results & Matching Score
-              </h2>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded bg-slate-100 text-slate-700">
-                Processed via NLP Matcher
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Overall Match</span>
-                <div className="text-3xl font-extrabold text-emerald-600 mt-1">
-                  {analysisResult.score ?? analysisResult.overallScore ?? 82}%
-                </div>
+        {/* Scan Results */}
+        {result && (
+          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-10">
+            <div className="flex items-center justify-between border-b pb-4 mb-4">
+              <div>
+                <h2 className="text-xl font-bold">Analysis Results</h2>
+                <span className="text-xs text-slate-400">Match score based on requirements</span>
               </div>
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Keywords</span>
-                <div className="text-3xl font-extrabold text-slate-800 mt-1">
-                  {analysisResult.categories?.keywordMatch ?? 78}%
-                </div>
-              </div>
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Experience</span>
-                <div className="text-3xl font-extrabold text-slate-800 mt-1">
-                  {analysisResult.categories?.experienceFit ?? 85}%
-                </div>
-              </div>
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
-                <span className="text-xs font-semibold text-slate-500 uppercase">Formatting</span>
-                <div className="text-3xl font-extrabold text-slate-800 mt-1">
-                  {analysisResult.categories?.formatting ?? 90}%
-                </div>
+              <div className="text-right">
+                <span className="text-3xl font-black text-emerald-600">{result.score}%</span>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-2">
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-3">
-                  Missing Target Keywords
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  {(analysisResult.missingKeywords || ['Docker', 'Kubernetes', 'CI/CD Pipelines', 'Redis']).map(
-                    (kw, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2.5 py-1 bg-red-50 text-red-700 border border-red-200 text-xs font-medium rounded-md"
-                      >
-                        + {kw}
-                      </span>
-                    )
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-3">
-                  Formatting & Parsing Alerts
-                </h3>
-                <ul className="space-y-2">
-                  {(analysisResult.formattingAlerts || [
-                    { type: 'success', msg: 'Single-column structure parsed cleanly.' },
-                    { type: 'warning', msg: 'Ensure technical skills use standard comma or bullet separation.' },
-                  ]).map((alert, idx) => (
-                    <li
-                      key={idx}
-                      className={`text-xs p-2.5 rounded-lg border flex items-center gap-2 ${
-                        alert.type === 'success'
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                          : 'bg-amber-50 border-amber-200 text-amber-800'
-                      }`}
-                    >
-                      <span>{alert.type === 'success' ? '✔' : '⚠'}</span>
-                      {alert.msg}
-                    </li>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-emerald-50 rounded-lg">
+                <h3 className="text-sm font-semibold text-emerald-900 mb-2">Matched Keywords</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {result.matchedKeywords?.map((kw, i) => (
+                    <span key={i} className="text-xs bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded">
+                      {kw}
+                    </span>
                   ))}
-                </ul>
+                </div>
+              </div>
+
+              <div className="p-4 bg-amber-50 rounded-lg">
+                <h3 className="text-sm font-semibold text-amber-900 mb-2">Missing Keywords</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {result.missingKeywords?.map((kw, i) => (
+                    <span key={i} className="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded">
+                      {kw}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
-          </section>
+          </div>
         )}
 
         {/* Scan History Feed */}
-        <ScanHistory refreshTrigger={historyRefreshKey} />
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-800 mb-4">Scan History</h2>
+          {history.length === 0 ? (
+            <p className="text-sm text-slate-500">No scans recorded yet. Run your first scan above.</p>
+          ) : (
+            <div className="divide-y">
+              {history.map((item, idx) => (
+                <div key={idx} className="py-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">{item.fileName}</p>
+                    <p className="text-xs text-slate-400">{new Date(item.createdAt).toLocaleString()}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-bold text-emerald-600">{item.score}% Score</span>
+                    <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded">
+                      {item.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </main>
-
-      {/* Global Modals */}
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
-        onSuccess={handleAuthSuccess}
-      />
-      <PurchaseModal
-        isOpen={isPurchaseOpen}
-        onClose={() => setIsPurchaseOpen(false)}
-        onPurchaseSuccess={handlePurchaseSuccess}
-        token={token}
-      />
     </div>
   );
 }
