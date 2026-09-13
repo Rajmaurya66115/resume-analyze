@@ -2,8 +2,11 @@ const Device = require('../models/Device');
 
 async function attachDevice(req, res, next) {
   try {
-    const fingerprint = req.headers['x-device-fingerprint'] || req.headers['X-Device-Fingerprint'];
-    
+    const fingerprint =
+      req.headers['x-device-id'] ||
+      req.headers['x-device-fingerprint'] ||
+      req.headers['X-Device-Fingerprint'];
+
     // Provide a fallback fingerprint so missing headers never crash the request
     const deviceHash = fingerprint || 'dev_fallback_' + (req.ip || 'local');
     req.deviceHash = deviceHash;
@@ -12,7 +15,8 @@ async function attachDevice(req, res, next) {
     if (!device) {
       device = await Device.create({
         deviceHash,
-        usedFreeTokens: 0,
+        freeTokensGranted: 10,
+        freeTokensUsed: 0,
       }).catch(() => null); // Catch potential duplicate key collisions safely
     }
 
@@ -20,7 +24,8 @@ async function attachDevice(req, res, next) {
     if (!device) {
       req.device = {
         freeTokensRemaining: () => 10,
-        usedFreeTokens: 0,
+        freeTokensGranted: 10,
+        freeTokensUsed: 0,
         save: async () => {},
       };
     } else {
@@ -33,7 +38,8 @@ async function attachDevice(req, res, next) {
     req.deviceHash = 'dev_guest';
     req.device = {
       freeTokensRemaining: () => 10,
-      usedFreeTokens: 0,
+      freeTokensGranted: 10,
+      freeTokensUsed: 0,
       save: async () => {},
     };
     next();
