@@ -91,7 +91,6 @@ export default function App() {
       fetchHistory();
     };
 
-    // Check if returning from GitHub OAuth redirect: ?code=xyz
     const urlParams = new URLSearchParams(window.location.search);
     const githubCode = urlParams.get('code');
     if (githubCode) {
@@ -149,10 +148,9 @@ export default function App() {
 
   // Google OAuth Login
   const handleGoogleLogin = () => {
-    /* global google */
     if (window.google && window.google.accounts) {
-      google.accounts.id.initialize({
-        client_id: '915640228399-YOUR_CLIENT_ID.apps.googleusercontent.com', // Replace with client ID or dynamic env
+      window.google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '915640228399-YOUR_CLIENT_ID.apps.googleusercontent.com',
         callback: async (response) => {
           try {
             const res = await fetch('/api/auth/google', {
@@ -166,6 +164,7 @@ export default function App() {
               setUser(data.user);
               if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
               setShowAuthModal(false);
+              fetchTokens();
               fetchHistory();
             } else {
               setAuthError(data.message || 'Google login failed');
@@ -175,19 +174,21 @@ export default function App() {
           }
         },
       });
-      google.accounts.id.prompt();
+      window.google.accounts.id.prompt();
     } else {
-      // Fallback message if Google GIS SDK script isn't cached yet
-      alert('Google Sign-In is initializing. Please configure your Google Client ID.');
+      alert('Google Sign-In SDK is loading. Please check your network connection.');
     }
   };
 
   // GitHub OAuth Login
   const handleGithubLogin = () => {
-    // Redirects to GitHub OAuth app authorization
-    const GITHUB_CLIENT_ID = 'Ov23liXXXXXXXXXX'; // Your GitHub Client ID
+    const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
+    if (!clientId) {
+      alert('VITE_GITHUB_CLIENT_ID is not configured in frontend environment variables.');
+      return;
+    }
     const redirectUri = encodeURIComponent(window.location.origin);
-    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${redirectUri}&scope=user:email`;
+    window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
   };
 
   const handleGithubCodeExchange = async (code) => {
@@ -202,6 +203,7 @@ export default function App() {
         localStorage.setItem('token', data.token);
         setUser(data.user);
         if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
+        fetchTokens();
         fetchHistory();
       } else {
         alert(data.message || 'GitHub login failed');
@@ -211,42 +213,65 @@ export default function App() {
     }
   };
 
-  // 6. Three-Tier Upgrade / Purchase Handler
-  const handleBuyPlan = async (tierName, amount, tokensCount) => {
+  // 6. Three-Tier Upgrade / Purchase Handler (Matches backend planKey)
+  const handleBuyPlan = async (planKey) => {
+    if (!user) {
+      alert('Please sign in or create an account before purchasing a plan.');
+      setShowUpgradeModal(false);
+      setShowAuthModal(true);
+      return;
+    }
+
     try {
       setPurchaseLoading(true);
       const res = await fetch('/api/purchase/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getHeaders() },
-        body: JSON.stringify({
-          plan: tierName,
-          tier: tierName,
-          amount: amount,
-          tokens: tokensCount,
-        }),
+        body: JSON.stringify({ planKey }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to initialize payment');
 
-      // Load Razorpay Modal if configured
+      if (data.isMock) {
+        // Handle dev mock flow
+        const verifyRes = await fetch('/api/purchase/verify-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getHeaders() },
+          body: JSON.stringify({
+            razorpay_order_id: data.orderId,
+            razorpay_payment_id: `pay_mock_${Date.now()}`,
+            razorpay_signature: 'mock_signature',
+            planKey,
+          }),
+        }).catch(() => null);
+
+        alert(`Payment completed in test mode for ${planKey.toUpperCase()}!`);
+        setShowUpgradeModal(false);
+        fetchTokens();
+        return;
+      }
+
       if (window.Razorpay && data.orderId) {
         const rzp = new window.Razorpay({
-          key: data.keyId || data.key,
+          key: data.keyId,
           amount: data.amount,
-          currency: 'INR',
+          currency: data.currency || 'INR',
           name: 'ResumeReview',
-          description: `${tierName.toUpperCase()} Plan Purchase`,
+          description: `${planKey.toUpperCase()} Plan Purchase`,
           order_id: data.orderId,
           handler: async (response) => {
             const verifyRes = await fetch('/api/purchase/verify-payment', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', ...getHeaders() },
-              body: JSON.stringify(response),
+              body: JSON.stringify({
+                ...response,
+                planKey,
+              }),
             });
             const verifyData = await verifyRes.json();
             if (verifyRes.ok) {
-              alert('Payment successful! Tokens have been credited.');
+              alert('Payment successful! Your tokens have been credited.');
               setShowUpgradeModal(false);
               fetchTokens();
             } else {
@@ -255,12 +280,6 @@ export default function App() {
           },
         });
         rzp.open();
-      } else if (data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
-      } else {
-        alert(`Order initiated for ${tierName.toUpperCase()} (₹${amount}). Backend order ID: ${data.orderId || 'OK'}`);
-        setShowUpgradeModal(false);
-        fetchTokens();
       }
     } catch (err) {
       alert(err.message);
@@ -557,22 +576,10 @@ export default function App() {
                 className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-lg text-xs font-semibold text-slate-700 transition"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27a7.195 7.195 0 0 1 0-4.54V6.58H1.25a11.97 11.97 0 0 0 0 10.84l4.03-3.15Z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z"
-                  />
+                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
+                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z" />
+                  <path fill="#FBBC05" d="M5.28 14.27a7.195 7.195 0 0 1 0-4.54V6.58H1.25a11.97 11.97 0 0 0 0 10.84l4.03-3.15Z" />
+                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z" />
                 </svg>
                 Continue with Google
               </button>
@@ -660,13 +667,12 @@ export default function App() {
               </p>
             </div>
 
-            {/* 3-Tier Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Tier 1: Starter */}
               <div className="border border-slate-200 rounded-xl p-5 flex flex-col justify-between hover:border-slate-300 transition">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900">Starter Pack</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">For quick job applications</p>
+                  <p className="text-xs text-slate-500 mt-0.5">For quick applications</p>
                   <div className="my-4">
                     <span className="text-3xl font-black text-slate-900">₹99</span>
                     <span className="text-xs text-slate-400"> / one-time</span>
@@ -678,15 +684,12 @@ export default function App() {
                     <li className="flex items-center gap-1.5">
                       <span className="text-emerald-600 font-bold">✓</span> Keyword Gap Analysis
                     </li>
-                    <li className="flex items-center gap-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span> Standard Support
-                    </li>
                   </ul>
                 </div>
                 <button
                   type="button"
                   disabled={purchaseLoading}
-                  onClick={() => handleBuyPlan('starter', 99, 20)}
+                  onClick={() => handleBuyPlan('starter')}
                   className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
                   {purchaseLoading ? 'Loading...' : 'Select Pack'}
@@ -700,27 +703,24 @@ export default function App() {
                 </span>
                 <div>
                   <h4 className="font-bold text-sm text-slate-900">Pro Pack</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">For active job hunters</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Active job hunters</p>
                   <div className="my-4">
-                    <span className="text-3xl font-black text-emerald-700">₹299</span>
+                    <span className="text-3xl font-black text-emerald-700">₹249</span>
                     <span className="text-xs text-slate-400"> / one-time</span>
                   </div>
                   <ul className="text-xs text-slate-600 space-y-2 mb-4">
                     <li className="flex items-center gap-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span> 100 ATS Scans
+                      <span className="text-emerald-600 font-bold">✓</span> 75 ATS Scans
                     </li>
                     <li className="flex items-center gap-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span> Deep Keyword Matching
-                    </li>
-                    <li className="flex items-center gap-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span> Format Audit & Tips
+                      <span className="text-emerald-600 font-bold">✓</span> Deep Keyword Analysis
                     </li>
                   </ul>
                 </div>
                 <button
                   type="button"
                   disabled={purchaseLoading}
-                  onClick={() => handleBuyPlan('pro', 299, 100)}
+                  onClick={() => handleBuyPlan('pro')}
                   className="w-full py-2 bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
                   {purchaseLoading ? 'Loading...' : 'Select Pack'}
@@ -731,17 +731,14 @@ export default function App() {
               <div className="border border-slate-200 rounded-xl p-5 flex flex-col justify-between hover:border-slate-300 transition">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900">Unlimited</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Uncapped access</p>
+                  <p className="text-xs text-slate-500 mt-0.5">30 days uncapped</p>
                   <div className="my-4">
-                    <span className="text-3xl font-black text-slate-900">₹699</span>
-                    <span className="text-xs text-slate-400"> / month</span>
+                    <span className="text-3xl font-black text-slate-900">₹499</span>
+                    <span className="text-xs text-slate-400"> / 30 days</span>
                   </div>
                   <ul className="text-xs text-slate-600 space-y-2 mb-4">
                     <li className="flex items-center gap-1.5">
                       <span className="text-emerald-600 font-bold">✓</span> Unlimited Scans
-                    </li>
-                    <li className="flex items-center gap-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span> Priority Parsing Speed
                     </li>
                     <li className="flex items-center gap-1.5">
                       <span className="text-emerald-600 font-bold">✓</span> Full Scan History
@@ -751,7 +748,7 @@ export default function App() {
                 <button
                   type="button"
                   disabled={purchaseLoading}
-                  onClick={() => handleBuyPlan('unlimited', 699, 9999)}
+                  onClick={() => handleBuyPlan('unlimited')}
                   className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
                   {purchaseLoading ? 'Loading...' : 'Select Pack'}
