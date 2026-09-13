@@ -15,13 +15,24 @@ export default function App() {
   // Modal States
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authSuccessMsg, setAuthSuccessMsg] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [purchaseLoading, setPurchaseLoading] = useState(false);
+
+  // Contact Modal States
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactSubject, setContactSubject] = useState('');
+  const [contactMessage, setContactMessage] = useState('');
+  const [contactLoading, setContactLoading] = useState(false);
+  const [contactStatus, setContactStatus] = useState(null);
 
   // 1. Device Identifier
   const getDeviceId = () => {
@@ -105,11 +116,33 @@ export default function App() {
     restoreSession();
   }, []);
 
-  // 5. Auth Handlers (Signup / Login / Logout)
+  // 5. Auth Handlers (Signup / Login / Logout / Forgot Password)
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthError('');
+    setAuthSuccessMsg('');
     setAuthLoading(true);
+
+    // If in Forgot Password Mode
+    if (isForgotPassword) {
+      try {
+        const res = await fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getHeaders() },
+          body: JSON.stringify({ email: authEmail }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Unable to process reset request');
+
+        setAuthSuccessMsg('Password reset link sent! Please check your email inbox.');
+        setAuthEmail('');
+      } catch (err) {
+        setAuthError(err.message);
+      } finally {
+        setAuthLoading(false);
+      }
+      return;
+    }
 
     const endpoint = isSignUp ? '/api/auth/signup' : '/api/auth/login';
 
@@ -292,7 +325,48 @@ export default function App() {
     }
   };
 
-  // 7. Scan Submission Handler
+  // 7. Contact Support Handler
+  const handleContactSubmit = async (e) => {
+    e.preventDefault();
+    setContactStatus(null);
+    setContactLoading(true);
+
+    try {
+      const res = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: contactName,
+          email: contactEmail,
+          subject: contactSubject,
+          message: contactMessage,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to submit query');
+
+      setContactStatus({
+        type: 'success',
+        message: 'Your inquiry has been sent! Check your email for confirmation.',
+      });
+      setContactName('');
+      setContactEmail('');
+      setContactSubject('');
+      setContactMessage('');
+
+      setTimeout(() => {
+        setShowContactModal(false);
+        setContactStatus(null);
+      }, 3000);
+    } catch (err) {
+      setContactStatus({ type: 'error', message: err.message });
+    } finally {
+      setContactLoading(false);
+    }
+  };
+
+  // 8. Scan Submission Handler
   const handleAnalyze = async (e) => {
     e.preventDefault();
     if (!file) {
@@ -358,6 +432,18 @@ export default function App() {
               <span>{user ? `Account (${tokens} Scans)` : `Guest Mode (${tokens} Free)`}</span>
             </div>
 
+            {/* Contact Support Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setContactStatus(null);
+                setShowContactModal(true);
+              }}
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg transition"
+            >
+              Contact Support
+            </button>
+
             <button
               type="button"
               onClick={() => setShowUpgradeModal(true)}
@@ -384,7 +470,9 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setIsSignUp(false);
+                  setIsForgotPassword(false);
                   setAuthError('');
+                  setAuthSuccessMsg('');
                   setShowAuthModal(true);
                 }}
                 className="border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg transition"
@@ -547,23 +635,34 @@ export default function App() {
       </main>
 
       {/* ----------------------------------------------------------- */}
-      {/* Sign In & Sign Up Modal                                     */}
+      {/* Sign In, Sign Up & Forgot Password Modal                    */}
       {/* ----------------------------------------------------------- */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 relative shadow-2xl">
             <button
               type="button"
-              onClick={() => setShowAuthModal(false)}
+              onClick={() => {
+                setShowAuthModal(false);
+                setIsForgotPassword(false);
+              }}
               className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold"
             >
               ✕
             </button>
             <h3 className="text-xl font-bold text-slate-900 mb-1">
-              {isSignUp ? 'Create an Account' : 'Welcome Back'}
+              {isForgotPassword
+                ? 'Reset Password'
+                : isSignUp
+                ? 'Create an Account'
+                : 'Welcome Back'}
             </h3>
             <p className="text-xs text-slate-500 mb-5">
-              {isSignUp ? 'Sign up to keep your scan history and tokens.' : 'Sign in to access your evaluations.'}
+              {isForgotPassword
+                ? 'Enter your registered email to receive a recovery link.'
+                : isSignUp
+                ? 'Sign up to keep your scan history and tokens.'
+                : 'Sign in to access your evaluations.'}
             </p>
 
             {authError && (
@@ -572,83 +671,215 @@ export default function App() {
               </div>
             )}
 
-            {/* Social Logins */}
-            <div className="space-y-2.5 mb-5">
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-lg text-xs font-semibold text-slate-700 transition"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
-                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z" />
-                  <path fill="#FBBC05" d="M5.28 14.27a7.195 7.195 0 0 1 0-4.54V6.58H1.25a11.97 11.97 0 0 0 0 10.84l4.03-3.15Z" />
-                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z" />
-                </svg>
-                Continue with Google
-              </button>
+            {authSuccessMsg && (
+              <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-lg">
+                {authSuccessMsg}
+              </div>
+            )}
 
-              {/* GitHub OAuth Login button commented out
-              <button
-                type="button"
-                onClick={handleGithubLogin}
-                className="w-full flex items-center justify-center gap-2 bg-[#24292F] hover:bg-[#1B1F23] text-white py-2.5 rounded-lg text-xs font-semibold transition"
-              >
-                <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
-                </svg>
-                Continue with GitHub
-              </button>
-              */}
-            </div>
+            {/* Social Logins (Only shown on Login/Signup, not during Reset) */}
+            {!isForgotPassword && (
+              <>
+                <div className="space-y-2.5 mb-5">
+                  <button
+                    type="button"
+                    onClick={handleGoogleLogin}
+                    className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-lg text-xs font-semibold text-slate-700 transition"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
+                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z" />
+                      <path fill="#FBBC05" d="M5.28 14.27a7.195 7.195 0 0 1 0-4.54V6.58H1.25a11.97 11.97 0 0 0 0 10.84l4.03-3.15Z" />
+                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z" />
+                    </svg>
+                    Continue with Google
+                  </button>
+                </div>
 
-            <div className="relative flex items-center justify-center mb-5">
-              <div className="border-t border-slate-200 w-full"></div>
-              <span className="bg-white px-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider absolute">
-                or
-              </span>
-            </div>
+                <div className="relative flex items-center justify-center mb-5">
+                  <div className="border-t border-slate-200 w-full"></div>
+                  <span className="bg-white px-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wider absolute">
+                    or
+                  </span>
+                </div>
+              </>
+            )}
 
             {/* Email & Password Form */}
             <form onSubmit={handleAuthSubmit} className="space-y-3">
-              <input
-                type="email"
-                required
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                placeholder="Email address"
-                className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              <input
-                type="password"
-                required
-                minLength={8}
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                placeholder="Password (8+ characters)"
-                className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Email address</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {!isForgotPassword && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-600">Password</label>
+                    {!isSignUp && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setAuthError('');
+                          setAuthSuccessMsg('');
+                        }}
+                        className="text-[11px] text-emerald-700 hover:underline font-semibold"
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Password (8+ characters)"
+                    className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={authLoading}
                 className="w-full bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold py-2.5 rounded-lg transition mt-2 disabled:opacity-50"
               >
-                {authLoading ? 'Processing...' : isSignUp ? 'Create Account' : 'Sign In'}
+                {authLoading
+                  ? 'Processing...'
+                  : isForgotPassword
+                  ? 'Send Reset Link'
+                  : isSignUp
+                  ? 'Create Account'
+                  : 'Sign In'}
               </button>
             </form>
 
             <div className="mt-4 text-center">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsSignUp(!isSignUp);
-                  setAuthError('');
-                }}
-                className="text-xs text-emerald-700 font-semibold hover:underline"
-              >
-                {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-              </button>
+              {isForgotPassword ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsForgotPassword(false);
+                    setAuthError('');
+                    setAuthSuccessMsg('');
+                  }}
+                  className="text-xs text-slate-600 font-semibold hover:underline"
+                >
+                  ← Back to Sign In
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSignUp(!isSignUp);
+                    setAuthError('');
+                    setAuthSuccessMsg('');
+                  }}
+                  className="text-xs text-emerald-700 font-semibold hover:underline"
+                >
+                  {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+                </button>
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------------- */}
+      {/* Contact Support Modal                                       */}
+      {/* ----------------------------------------------------------- */}
+      {showContactModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 sm:p-8 relative shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setShowContactModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 font-bold text-lg"
+            >
+              ✕
+            </button>
+            <h3 className="text-xl font-bold text-slate-900 mb-1">Contact Support</h3>
+            <p className="text-xs text-slate-500 mb-5">
+              Have a question or feedback? We will reply to your email promptly.
+            </p>
+
+            {contactStatus && (
+              <div
+                className={`mb-4 p-3 rounded-lg text-xs font-medium border ${
+                  contactStatus.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {contactStatus.message}
+              </div>
+            )}
+
+            <form onSubmit={handleContactSubmit} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Your Name</label>
+                <input
+                  type="text"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                  placeholder="e.g. John Doe"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Email Address *</label>
+                <input
+                  type="email"
+                  required
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Subject</label>
+                <input
+                  type="text"
+                  value={contactSubject}
+                  onChange={(e) => setContactSubject(e.target.value)}
+                  placeholder="e.g. Question about Resume ATS Scores"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Message *</label>
+                <textarea
+                  rows={4}
+                  required
+                  value={contactMessage}
+                  onChange={(e) => setContactMessage(e.target.value)}
+                  placeholder="Describe your inquiry or issue..."
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={contactLoading}
+                className="w-full bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold py-2.5 rounded-lg transition disabled:opacity-50"
+              >
+                {contactLoading ? 'Sending Inquiry...' : 'Send Message'}
+              </button>
+            </form>
           </div>
         </div>
       )}
