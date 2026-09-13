@@ -18,11 +18,10 @@ app.use(
   })
 );
 
-// 2. Dynamic CORS Configuration (Supports local dev, custom domain, and all Vercel deployments)
+// 2. Dynamic CORS: Automatically allows localhost and all vercel.app domains
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or same-origin server-to-server)
       if (!origin) return callback(null, true);
 
       const isLocal = origin.includes('localhost');
@@ -41,7 +40,7 @@ app.use(
   })
 );
 
-// 3. Raw Body Capture for Razorpay Webhook Signature Verification
+// 3. Raw Body Capture for Razorpay Webhook
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -55,7 +54,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // 4. Rate Limiting
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 30,
   message: { error: 'too_many_requests', message: 'Too many authentication attempts. Please try again later.' },
   standardHeaders: true,
@@ -63,7 +62,7 @@ const authLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
+  windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
@@ -87,7 +86,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 5. Serverless Database Connection Caching (With Buffering Enabled)
+// 5. Serverless Database Connection Caching
 const MONGODB_URI = process.env.MONGODB_URI;
 let cachedDb = null;
 
@@ -97,7 +96,7 @@ async function connectDB() {
   }
   try {
     cachedDb = await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000, // Fail quickly if network or IP is blocked
+      serverSelectionTimeoutMS: 5000,
     });
     console.log('Connected to MongoDB');
     return cachedDb;
@@ -107,7 +106,7 @@ async function connectDB() {
   }
 }
 
-// Middleware: ensure DB connection before handling any incoming request
+// Middleware: ensure DB connection before handling requests
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -117,11 +116,10 @@ app.use(async (req, res, next) => {
   }
 });
 
-// Run app.listen only when running locally on your computer
+// Run locally on computer
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => console.log(`Local development server running on port ${PORT}`));
 }
 
-// Export app for Vercel Serverless Functions
 module.exports = app;
