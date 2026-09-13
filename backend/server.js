@@ -18,7 +18,7 @@ app.use(
   })
 );
 
-// 2. Dynamic CORS: Automatically allows localhost and all vercel.app domains
+// 2. Dynamic CORS: Automatically permits localhost and all Vercel domains
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -52,41 +52,7 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 
-// 4. Rate Limiting
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
-  message: { error: 'too_many_requests', message: 'Too many authentication attempts. Please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use('/api/auth', authLimiter, authRoutes);
-app.use('/api/analyze', apiLimiter, analyzeRoutes);
-app.use('/api/purchase', purchaseRoutes);
-
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// Global Error Handler
-app.use((err, req, res, next) => {
-  console.error('[Server Error]:', err.message);
-  res.status(err.status || 500).json({
-    error: 'server_error',
-    message: process.env.NODE_ENV === 'production' ? 'An internal error occurred.' : err.message,
-  });
-});
-
-// 5. Serverless Database Connection Caching
+// 4. Serverless Database Connection Caching (Must run BEFORE routes)
 const MONGODB_URI = process.env.MONGODB_URI;
 let cachedDb = null;
 
@@ -106,7 +72,7 @@ async function connectDB() {
   }
 }
 
-// Middleware: ensure DB connection before handling requests
+// Middleware: connect to DB before any route handler executes
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -116,7 +82,42 @@ app.use(async (req, res, next) => {
   }
 });
 
-// Run locally on computer
+// 5. Rate Limiting
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { error: 'too_many_requests', message: 'Too many authentication attempts. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// 6. Routes (Now protected by active DB connection above)
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/analyze', apiLimiter, analyzeRoutes);
+app.use('/api/purchase', purchaseRoutes);
+
+// Health Check Endpoint
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error('[Server Error]:', err.message);
+  res.status(err.status || 500).json({
+    error: 'server_error',
+    message: process.env.NODE_ENV === 'production' ? 'An internal error occurred.' : err.message,
+  });
+});
+
+// Run locally if in dev
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => console.log(`Local development server running on port ${PORT}`));
