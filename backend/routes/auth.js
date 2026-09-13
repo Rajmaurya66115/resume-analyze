@@ -280,7 +280,11 @@ router.post('/forgot-password', async (req, res) => {
     });
   } catch (err) {
     console.error('[Forgot Password Error]:', err);
-    return res.status(500).json({ error: 'server_error', message: 'Failed to process reset request.' });
+    return res.status(500).json({
+      error: 'server_error',
+      message: err.message || 'Failed to process reset request.',
+      code: err.code || null,
+    });
   }
 });
 
@@ -311,7 +315,11 @@ router.post('/reset-password', async (req, res) => {
     return res.status(200).json({ success: true, message: 'Password has been successfully updated.' });
   } catch (err) {
     console.error('[Reset Password Error]:', err);
-    return res.status(500).json({ error: 'server_error', message: 'Failed to reset password.' });
+    return res.status(500).json({
+      error: 'server_error',
+      message: err.message || 'Failed to reset password.',
+      code: err.code || null,
+    });
   }
 });
 
