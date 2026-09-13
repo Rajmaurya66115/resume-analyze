@@ -219,42 +219,128 @@ export default function App() {
           </div>
         </form>
 
-        {/* Scan Results */}
+        {/* Detailed Scan Results */}
         {result && (
-          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-10">
-            <div className="flex items-center justify-between border-b pb-4 mb-4">
+          <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm mb-10 space-y-8">
+            {/* Header / Overall Score */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-100 gap-4">
               <div>
-                <h2 className="text-xl font-bold">Analysis Results</h2>
-                <span className="text-xs text-slate-400">Match score based on requirements</span>
+                <span className="text-xs font-semibold tracking-wider text-emerald-600 uppercase">
+                  ATS Scan Completed
+                </span>
+                <h2 className="text-2xl font-bold text-slate-900 mt-1">Detailed Analysis Report</h2>
               </div>
-              <div className="text-right">
+              <div className="flex items-center gap-3 bg-emerald-50 px-5 py-3 rounded-xl border border-emerald-100">
+                <span className="text-xs font-semibold uppercase text-emerald-800 tracking-wide">
+                  Overall Score
+                </span>
                 <span className="text-3xl font-black text-emerald-600">{result.score}%</span>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-emerald-50 rounded-lg">
-                <h3 className="text-sm font-semibold text-emerald-900 mb-2">Matched Keywords</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {result.matchedKeywords?.map((kw, i) => (
-                    <span key={i} className="text-xs bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded">
-                      {kw}
-                    </span>
-                  ))}
+            {/* Score Categories Breakdown */}
+            {result.categories && (
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
+                  Category Breakdown
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-medium text-slate-500">Keyword Alignment</p>
+                    <p className="text-2xl font-bold text-slate-800 mt-1">
+                      {result.categories.keywordMatch}%
+                    </p>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-medium text-slate-500">Experience Match</p>
+                    <p className="text-2xl font-bold text-slate-800 mt-1">
+                      {result.categories.experienceFit}%
+                    </p>
+                  </div>
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+                    <p className="text-xs font-medium text-slate-500">Formatting Check</p>
+                    <p className="text-2xl font-bold text-slate-800 mt-1">
+                      {result.categories.formatting}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Keywords Match & Gap Analysis */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Matched Keywords */}
+              <div className="p-5 bg-emerald-50/60 rounded-xl border border-emerald-100">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold text-emerald-950">Matched Keywords</h3>
+                  <span className="text-xs font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                    {result.matchedKeywords?.length || 0} Found
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {result.matchedKeywords && result.matchedKeywords.length > 0 ? (
+                    result.matchedKeywords.map((kw, i) => (
+                      <span
+                        key={i}
+                        className="text-xs font-medium bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-md border border-emerald-200"
+                      >
+                        ✓ {kw}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-emerald-600 italic">No direct keyword overlaps detected.</span>
+                  )}
                 </div>
               </div>
 
-              <div className="p-4 bg-amber-50 rounded-lg">
-                <h3 className="text-sm font-semibold text-amber-900 mb-2">Missing Keywords</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {result.missingKeywords?.map((kw, i) => (
-                    <span key={i} className="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded">
-                      {kw}
-                    </span>
-                  ))}
+              {/* Missing Keywords */}
+              <div className="p-5 bg-rose-50/60 rounded-xl border border-rose-100">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold text-rose-950">Missing Required Skills</h3>
+                  <span className="text-xs font-semibold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                    {result.missingKeywords?.length || 0} Missing
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {result.missingKeywords && result.missingKeywords.length > 0 ? (
+                    result.missingKeywords.map((kw, i) => (
+                      <span
+                        key={i}
+                        className="text-xs font-medium bg-rose-100 text-rose-800 px-2.5 py-1 rounded-md border border-rose-200"
+                      >
+                        ✕ {kw}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-rose-600 italic">All key JD terms are covered.</span>
+                  )}
                 </div>
               </div>
             </div>
+
+            {/* Formatting Alerts */}
+            {result.formattingAlerts && result.formattingAlerts.length > 0 && (
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">
+                  Parser Checks & Structure
+                </h3>
+                <div className="space-y-2">
+                  {result.formattingAlerts.map((alert, i) => (
+                    <div
+                      key={i}
+                      className={`p-3.5 rounded-lg text-xs font-medium flex items-start gap-2.5 border ${
+                        alert.type === 'success'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                      }`}
+                    >
+                      <span>{alert.type === 'success' ? '✔' : '⚠'}</span>
+                      <span>{alert.msg}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
