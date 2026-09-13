@@ -18,20 +18,21 @@ app.use(
   })
 );
 
-// 2. Strict CORS Configuration (Supports local dev & production FRONTEND_URL)
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
+// 2. Dynamic CORS Configuration (Supports local dev, custom domain, and all Vercel deployments)
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow requests with no origin (like mobile apps, curl, or same-origin server-to-server)
+      if (!origin) return callback(null, true);
+
+      const isLocal = origin.includes('localhost');
+      const isVercel = origin.endsWith('.vercel.app');
+      const isCustomFrontend = process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL;
+
+      if (isLocal || isVercel || isCustomFrontend) {
         callback(null, true);
       } else {
-        callback(new Error('Blocked by CORS policy'));
+        callback(new Error(`Blocked by CORS policy: ${origin}`));
       }
     },
     credentials: true,
@@ -41,7 +42,6 @@ app.use(
 );
 
 // 3. Raw Body Capture for Razorpay Webhook Signature Verification
-// Webhooks require the raw request buffer to verify HMAC signatures accurately
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -56,7 +56,7 @@ app.use(express.urlencoded({ extended: true }));
 // 4. Rate Limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 30, // Max 30 login/signup attempts per IP
+  max: 30,
   message: { error: 'too_many_requests', message: 'Too many authentication attempts. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -64,7 +64,7 @@ const authLimiter = rateLimit({
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 60, // Max 60 requests per minute
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -87,7 +87,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 5. Serverless Database Connection Caching (Vercel Ready)
+// 5. Serverless Database Connection Caching (With Buffering Enabled)
 const MONGODB_URI = process.env.MONGODB_URI;
 let cachedDb = null;
 
@@ -97,7 +97,7 @@ async function connectDB() {
   }
   try {
     cachedDb = await mongoose.connect(MONGODB_URI, {
-      bufferCommands: false,
+      serverSelectionTimeoutMS: 5000, // Fail quickly if network or IP is blocked
     });
     console.log('Connected to MongoDB');
     return cachedDb;
