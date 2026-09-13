@@ -66,7 +66,7 @@ export default function App() {
     }
   };
 
-  // 4. Restore User Session on Load & Handle GitHub OAuth Callback
+  // 4. Restore User Session on Load
   useEffect(() => {
     const restoreSession = async () => {
       const token = localStorage.getItem('token');
@@ -91,6 +91,7 @@ export default function App() {
       fetchHistory();
     };
 
+    /* GitHub OAuth Callback Handler Commented Out
     const urlParams = new URLSearchParams(window.location.search);
     const githubCode = urlParams.get('code');
     if (githubCode) {
@@ -99,6 +100,9 @@ export default function App() {
     } else {
       restoreSession();
     }
+    */
+
+    restoreSession();
   }, []);
 
   // 5. Auth Handlers (Signup / Login / Logout)
@@ -180,7 +184,7 @@ export default function App() {
     }
   };
 
-  // GitHub OAuth Login
+  /* GitHub OAuth Logic Commented Out
   const handleGithubLogin = () => {
     const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
     if (!clientId) {
@@ -212,6 +216,7 @@ export default function App() {
       alert('GitHub exchange failed: ' + err.message);
     }
   };
+  */
 
   // 6. Three-Tier Upgrade / Purchase Handler (Matches backend planKey)
   const handleBuyPlan = async (planKey) => {
@@ -234,7 +239,6 @@ export default function App() {
       if (!res.ok) throw new Error(data.message || 'Failed to initialize payment');
 
       if (data.isMock) {
-        // Handle dev mock flow
         const verifyRes = await fetch('/api/purchase/verify-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...getHeaders() },
@@ -584,6 +588,7 @@ export default function App() {
                 Continue with Google
               </button>
 
+              {/* GitHub OAuth Login button commented out
               <button
                 type="button"
                 onClick={handleGithubLogin}
@@ -594,6 +599,7 @@ export default function App() {
                 </svg>
                 Continue with GitHub
               </button>
+              */}
             </div>
 
             <div className="relative flex items-center justify-center mb-5">
