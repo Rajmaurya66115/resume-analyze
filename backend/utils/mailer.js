@@ -1,8 +1,9 @@
 const nodemailer = require('nodemailer');
 
 const getTransporter = () => {
-  const user = (process.env.EMAIL_USER || '').trim();
-  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+  // Strip quotes, spaces, and newline characters
+  const user = (process.env.EMAIL_USER || '').trim().replace(/['"]/g, '');
+  const pass = (process.env.EMAIL_PASS || '').trim().replace(/['"\s]/g, '');
 
   if (!user || !pass) {
     throw new Error('EMAIL_USER or EMAIL_PASS environment variable is missing.');
@@ -20,7 +21,7 @@ const getTransporter = () => {
 // 1. Contact Form Email Notifications
 const sendContactEmails = async ({ name, email, subject, message }) => {
   const transporter = getTransporter();
-  const adminEmail = (process.env.ADMIN_EMAIL || process.env.EMAIL_USER || '').trim();
+  const adminEmail = (process.env.ADMIN_EMAIL || process.env.EMAIL_USER || '').trim().replace(/['"]/g, '');
 
   const adminMailOptions = {
     from: `"ResumeReview System" <${process.env.EMAIL_USER}>`,

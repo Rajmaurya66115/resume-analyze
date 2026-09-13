@@ -12,6 +12,9 @@ const contactRoutes = require('./routes/contact');
 
 const app = express();
 
+// Trust Vercel's reverse proxy for express-rate-limit
+app.set('trust proxy', 1);
+
 // 1. Security Headers
 app.use(
   helmet({
@@ -54,7 +57,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // 4. Connect to DB Before Every Route
 app.use(async (req, res, next) => {
-  // Skip DB check for simple health check
   if (req.path === '/api/health') return next();
   try {
     await connectDB();
