@@ -1,12 +1,14 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const Device = require('../models/Device');
 const AnalysisHistory = require('../models/AnalysisHistory');
 const { attachDevice } = require('../middleware/deviceId');
 const { JWT_SECRET, optionalAuth, requireAuth } = require('../middleware/auth');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -242,6 +244,74 @@ router.post('/github', attachDevice, async (req, res, next) => {
   } catch (err) {
     console.error('GitHub Auth Error:', err);
     return res.status(500).json({ error: 'auth_failed', message: err.message });
+  }
+});
+
+// POST /api/auth/forgot-password
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'missing_email', message: 'Please enter your email.' });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: 'If an account exists with this email, a reset link has been sent.',
+      });
+    }
+
+    // Generate secure token valid for 1 hour
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(token).digest('hex');
+    user.resetPasswordExpires = Date.now() + 3600000;
+    await user.save();
+
+    const origin = req.headers.origin || 'https://resume-analyze-nu.vercel.app';
+    const resetUrl = `${origin}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+
+    await sendPasswordResetEmail(email, resetUrl);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset link sent! Please check your inbox.',
+    });
+  } catch (err) {
+    console.error('[Forgot Password Error]:', err);
+    return res.status(500).json({ error: 'server_error', message: 'Failed to process reset request.' });
+  }
+});
+
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, email, newPassword } = req.body;
+    if (!token || !email || !newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: 'invalid_input', message: 'Token, email, and 8+ char password required.' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      email,
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'invalid_token', message: 'Password reset link is invalid or has expired.' });
+    }
+
+    user.passwordHash = await bcrypt.hash(newPassword, 12);
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+
+    return res.status(200).json({ success: true, message: 'Password has been successfully updated.' });
+  } catch (err) {
+    console.error('[Reset Password Error]:', err);
+    return res.status(500).json({ error: 'server_error', message: 'Failed to reset password.' });
   }
 });
 
