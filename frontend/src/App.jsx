@@ -7,16 +7,23 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  // Token & History State
+  // Dynamic Token, History & User States
   const [tokens, setTokens] = useState(10);
   const [history, setHistory] = useState([]);
+  const [user, setUser] = useState(null);
 
   // Modal States
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
-  // 1. Device Identifier for Guest Mode
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [purchaseLoading, setPurchaseLoading] = useState(false);
+
+  // 1. Device Identifier
   const getDeviceId = () => {
     let id = localStorage.getItem('x_device_id');
     if (!id) {
@@ -26,11 +33,14 @@ export default function App() {
     return id;
   };
 
-  const getHeaders = () => ({
-    'x-device-id': getDeviceId(),
-  });
+  const getHeaders = () => {
+    const headers = { 'x-device-id': getDeviceId() };
+    const token = localStorage.getItem('token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  };
 
-  // 2. Fetch Live Token Balance from MongoDB
+  // 2. Sync Token Balance from DB
   const fetchTokens = async () => {
     try {
       const res = await fetch('/api/analyze/tokens', { headers: getHeaders() });
@@ -43,7 +53,7 @@ export default function App() {
     }
   };
 
-  // 3. Fetch Scan History from MongoDB
+  // 3. Sync Scan History from DB
   const fetchHistory = async () => {
     try {
       const res = await fetch('/api/analyze/history', { headers: getHeaders() });
@@ -56,12 +66,210 @@ export default function App() {
     }
   };
 
+  // 4. Restore User Session on Load & Handle GitHub OAuth Callback
   useEffect(() => {
-    fetchTokens();
-    fetchHistory();
+    const restoreSession = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const res = await fetch('/api/auth/me', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (res.ok && data.id) {
+            setUser(data);
+            if (typeof data.tokenBalance === 'number') setTokens(data.tokenBalance);
+          } else {
+            localStorage.removeItem('token');
+            setUser(null);
+          }
+        } catch {
+          localStorage.removeItem('token');
+        }
+      }
+      fetchTokens();
+      fetchHistory();
+    };
+
+    // Check if returning from GitHub OAuth redirect: ?code=xyz
+    const urlParams = new URLSearchParams(window.location.search);
+    const githubCode = urlParams.get('code');
+    if (githubCode) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      handleGithubCodeExchange(githubCode);
+    } else {
+      restoreSession();
+    }
   }, []);
 
-  // 4. Scan Submission Handler
+  // 5. Auth Handlers (Signup / Login / Logout)
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    const endpoint = isSignUp ? '/api/auth/signup' : '/api/auth/login';
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Authentication failed');
+      }
+
+      if (data.token) localStorage.setItem('token', data.token);
+      if (data.user) {
+        setUser(data.user);
+        if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
+      }
+
+      setShowAuthModal(false);
+      setAuthEmail('');
+      setAuthPassword('');
+      fetchTokens();
+      fetchHistory();
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setUser(null);
+    fetchTokens();
+    fetchHistory();
+  };
+
+  // Google OAuth Login
+  const handleGoogleLogin = () => {
+    /* global google */
+    if (window.google && window.google.accounts) {
+      google.accounts.id.initialize({
+        client_id: '915640228399-YOUR_CLIENT_ID.apps.googleusercontent.com', // Replace with client ID or dynamic env
+        callback: async (response) => {
+          try {
+            const res = await fetch('/api/auth/google', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...getHeaders() },
+              body: JSON.stringify({ credential: response.credential }),
+            });
+            const data = await res.json();
+            if (res.ok && data.token) {
+              localStorage.setItem('token', data.token);
+              setUser(data.user);
+              if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
+              setShowAuthModal(false);
+              fetchHistory();
+            } else {
+              setAuthError(data.message || 'Google login failed');
+            }
+          } catch (err) {
+            setAuthError('Google sign in error: ' + err.message);
+          }
+        },
+      });
+      google.accounts.id.prompt();
+    } else {
+      // Fallback message if Google GIS SDK script isn't cached yet
+      alert('Google Sign-In is initializing. Please configure your Google Client ID.');
+    }
+  };
+
+  // GitHub OAuth Login
+  const handleGithubLogin = () => {
+    // Redirects to GitHub OAuth app authorization
+    const GITHUB_CLIENT_ID = 'Ov23liXXXXXXXXXX'; // Your GitHub Client ID
+    const redirectUri = encodeURIComponent(window.location.origin);
+    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${redirectUri}&scope=user:email`;
+  };
+
+  const handleGithubCodeExchange = async (code) => {
+    try {
+      const res = await fetch('/api/auth/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('token', data.token);
+        setUser(data.user);
+        if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
+        fetchHistory();
+      } else {
+        alert(data.message || 'GitHub login failed');
+      }
+    } catch (err) {
+      alert('GitHub exchange failed: ' + err.message);
+    }
+  };
+
+  // 6. Three-Tier Upgrade / Purchase Handler
+  const handleBuyPlan = async (tierName, amount, tokensCount) => {
+    try {
+      setPurchaseLoading(true);
+      const res = await fetch('/api/purchase/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify({
+          plan: tierName,
+          tier: tierName,
+          amount: amount,
+          tokens: tokensCount,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to initialize payment');
+
+      // Load Razorpay Modal if configured
+      if (window.Razorpay && data.orderId) {
+        const rzp = new window.Razorpay({
+          key: data.keyId || data.key,
+          amount: data.amount,
+          currency: 'INR',
+          name: 'ResumeReview',
+          description: `${tierName.toUpperCase()} Plan Purchase`,
+          order_id: data.orderId,
+          handler: async (response) => {
+            const verifyRes = await fetch('/api/purchase/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...getHeaders() },
+              body: JSON.stringify(response),
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok) {
+              alert('Payment successful! Tokens have been credited.');
+              setShowUpgradeModal(false);
+              fetchTokens();
+            } else {
+              alert('Payment verification failed: ' + verifyData.message);
+            }
+          },
+        });
+        rzp.open();
+      } else if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+      } else {
+        alert(`Order initiated for ${tierName.toUpperCase()} (₹${amount}). Backend order ID: ${data.orderId || 'OK'}`);
+        setShowUpgradeModal(false);
+        fetchTokens();
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
+  // 7. Scan Submission Handler
   const handleAnalyze = async (e) => {
     e.preventDefault();
     if (!file) {
@@ -88,10 +296,7 @@ export default function App() {
       });
 
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.message || 'Error processing resume.');
-      }
+      if (!res.ok) throw new Error(data.message || 'Error processing resume.');
 
       setResult(data);
 
@@ -112,7 +317,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white text-slate-900 font-sans">
       {/* Top Navbar */}
-      <header className="border-b border-slate-200 bg-white">
+      <header className="border-b border-slate-200 bg-white sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-[#0ea5e9]/10 text-[#0284c7] flex items-center justify-center font-black text-lg">
@@ -126,8 +331,8 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-emerald-300 bg-emerald-50/70 text-emerald-800 text-xs font-semibold">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span>Guest Mode ({tokens} Free)</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>{user ? `Account (${tokens} Scans)` : `Guest Mode (${tokens} Free)`}</span>
             </div>
 
             <button
@@ -138,21 +343,37 @@ export default function App() {
               Upgrade / Tokens
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(false);
-                setShowAuthModal(true);
-              }}
-              className="border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg transition"
-            >
-              Sign In
-            </button>
+            {user ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg">
+                  {user.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSignUp(false);
+                  setAuthError('');
+                  setShowAuthModal(true);
+                }}
+                className="border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-4 py-2 rounded-lg transition"
+              >
+                Sign In
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Container */}
+      {/* Hero Section */}
       <main className="max-w-4xl mx-auto px-6 py-14">
         <div className="text-center mb-10">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-slate-900 tracking-tight mb-4">
@@ -164,7 +385,6 @@ export default function App() {
           </p>
         </div>
 
-        {/* Error Alert */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm">
             {error}
@@ -304,7 +524,7 @@ export default function App() {
       </main>
 
       {/* ----------------------------------------------------------- */}
-      {/* Sign In & Sign Up Modal (with Google and GitHub OAuth)      */}
+      {/* Sign In & Sign Up Modal                                     */}
       {/* ----------------------------------------------------------- */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
@@ -323,11 +543,17 @@ export default function App() {
               {isSignUp ? 'Sign up to keep your scan history and tokens.' : 'Sign in to access your evaluations.'}
             </p>
 
+            {authError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
+                {authError}
+              </div>
+            )}
+
             {/* Social Logins */}
             <div className="space-y-2.5 mb-5">
               <button
                 type="button"
-                onClick={() => setShowAuthModal(false)}
+                onClick={handleGoogleLogin}
                 className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-lg text-xs font-semibold text-slate-700 transition"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -353,7 +579,7 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setShowAuthModal(false)}
+                onClick={handleGithubLogin}
                 className="w-full flex items-center justify-center gap-2 bg-[#24292F] hover:bg-[#1B1F23] text-white py-2.5 rounded-lg text-xs font-semibold transition"
               >
                 <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
@@ -370,38 +596,41 @@ export default function App() {
               </span>
             </div>
 
-            {/* Email & Password */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                setShowAuthModal(false);
-              }}
-              className="space-y-3"
-            >
+            {/* Email & Password Form */}
+            <form onSubmit={handleAuthSubmit} className="space-y-3">
               <input
                 type="email"
                 required
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
                 placeholder="Email address"
                 className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
               />
               <input
                 type="password"
                 required
-                placeholder="Password"
+                minLength={8}
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                placeholder="Password (8+ characters)"
                 className="w-full text-xs border border-slate-300 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500"
               />
               <button
                 type="submit"
-                className="w-full bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold py-2.5 rounded-lg transition mt-2"
+                disabled={authLoading}
+                className="w-full bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold py-2.5 rounded-lg transition mt-2 disabled:opacity-50"
               >
-                {isSignUp ? 'Create Account' : 'Sign In'}
+                {authLoading ? 'Processing...' : isSignUp ? 'Create Account' : 'Sign In'}
               </button>
             </form>
 
             <div className="mt-4 text-center">
               <button
                 type="button"
-                onClick={() => setIsSignUp(!isSignUp)}
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setAuthError('');
+                }}
                 className="text-xs text-emerald-700 font-semibold hover:underline"
               >
                 {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
@@ -456,14 +685,15 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowUpgradeModal(false)}
-                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition"
+                  disabled={purchaseLoading}
+                  onClick={() => handleBuyPlan('starter', 99, 20)}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
-                  Select Pack
+                  {purchaseLoading ? 'Loading...' : 'Select Pack'}
                 </button>
               </div>
 
-              {/* Tier 2: Pro (Featured) */}
+              {/* Tier 2: Pro */}
               <div className="border-2 border-emerald-600 bg-emerald-50/30 rounded-xl p-5 flex flex-col justify-between relative shadow-sm">
                 <span className="absolute -top-2.5 right-4 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
                   Popular
@@ -489,10 +719,11 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowUpgradeModal(false)}
-                  className="w-full py-2 bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold rounded-lg transition"
+                  disabled={purchaseLoading}
+                  onClick={() => handleBuyPlan('pro', 299, 100)}
+                  className="w-full py-2 bg-[#0f766e] hover:bg-[#115e59] text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
-                  Select Pack
+                  {purchaseLoading ? 'Loading...' : 'Select Pack'}
                 </button>
               </div>
 
@@ -519,10 +750,11 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowUpgradeModal(false)}
-                  className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition"
+                  disabled={purchaseLoading}
+                  onClick={() => handleBuyPlan('unlimited', 699, 9999)}
+                  className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50"
                 >
-                  Select Pack
+                  {purchaseLoading ? 'Loading...' : 'Select Pack'}
                 </button>
               </div>
             </div>
