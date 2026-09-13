@@ -12,6 +12,16 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [user, setUser] = useState(null);
 
+  // Modal States
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+
   // 1. Persistent Device Fingerprint Identifier
   const getDeviceId = () => {
     let id = localStorage.getItem('x_device_id');
@@ -64,13 +74,71 @@ export default function App() {
     }
   };
 
-  // 4. Initial Load
+  // 4. Check Local Session on Mount
   useEffect(() => {
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch (e) {
+        localStorage.removeItem('user');
+      }
+    }
     fetchTokens();
     fetchHistory();
   }, []);
 
-  // 5. Scan Submission
+  // 5. Auth Handlers (Login / Signup / Logout)
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    const endpoint = authMode === 'signup' ? '/api/auth/register' : '/api/auth/login';
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || 'Authentication failed.');
+      }
+
+      // Save token and user details
+      if (data.token) {
+        localStorage.setItem('token', data.token);
+      }
+      if (data.user) {
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setUser(data.user);
+      }
+
+      setShowAuthModal(false);
+      setAuthEmail('');
+      setAuthPassword('');
+      fetchTokens();
+      fetchHistory();
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
+    fetchTokens();
+    fetchHistory();
+  };
+
+  // 6. Scan Submission
   const handleAnalyze = async (e) => {
     e.preventDefault();
     if (!file) {
@@ -104,14 +172,12 @@ export default function App() {
 
       setResult(data);
 
-      // Decrement token count in UI
       if (typeof data.remainingTokens === 'number') {
         setTokens(data.remainingTokens);
       } else {
         fetchTokens();
       }
 
-      // Refresh history list immediately
       fetchHistory();
     } catch (err) {
       setError(err.message);
@@ -123,7 +189,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Top Navbar */}
-      <header className="border-b bg-white">
+      <header className="border-b bg-white sticky top-0 z-30 shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="bg-emerald-600 text-white font-black text-xl px-2.5 py-1 rounded-md">R</span>
@@ -138,12 +204,39 @@ export default function App() {
               {user ? `Tokens: ${tokens}` : `Guest Mode (${tokens} Free)`}
             </span>
 
-            <button className="bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium px-4 py-1.5 rounded-md transition">
+            {/* Upgrade Button */}
+            <button
+              onClick={() => setShowUpgradeModal(true)}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-medium px-4 py-1.5 rounded-md transition shadow-sm"
+            >
               Upgrade / Tokens
             </button>
-            <button className="text-sm font-medium border border-slate-300 hover:bg-slate-100 px-4 py-1.5 rounded-md transition">
-              Sign In
-            </button>
+
+            {/* Sign In / User Profile */}
+            {user ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600 border px-2 py-1 rounded-md bg-slate-100">
+                  {user.email}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="text-xs text-rose-600 hover:underline font-medium"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setAuthMode('login');
+                  setAuthError('');
+                  setShowAuthModal(true);
+                }}
+                className="text-sm font-medium border border-slate-300 hover:bg-slate-100 px-4 py-1.5 rounded-md transition"
+              >
+                Sign In
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -170,7 +263,6 @@ export default function App() {
         {/* Upload Form */}
         <form onSubmit={handleAnalyze} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm mb-10">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 1. Resume File */}
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                 1. Upload Resume
@@ -193,7 +285,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 2. Job Description */}
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                 2. Job Description
@@ -222,7 +313,6 @@ export default function App() {
         {/* Detailed Scan Results */}
         {result && (
           <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-sm mb-10 space-y-8">
-            {/* Header / Overall Score */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-100 gap-4">
               <div>
                 <span className="text-xs font-semibold tracking-wider text-emerald-600 uppercase">
@@ -238,7 +328,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Score Categories Breakdown */}
             {result.categories && (
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
@@ -267,9 +356,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Keywords Match & Gap Analysis */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Matched Keywords */}
               <div className="p-5 bg-emerald-50/60 rounded-xl border border-emerald-100">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold text-emerald-950">Matched Keywords</h3>
@@ -293,7 +380,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Missing Keywords */}
               <div className="p-5 bg-rose-50/60 rounded-xl border border-rose-100">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold text-rose-950">Missing Required Skills</h3>
@@ -318,7 +404,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Formatting Alerts */}
             {result.formattingAlerts && result.formattingAlerts.length > 0 && (
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">
@@ -369,6 +454,154 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* ----------------------------------------------------------------- */}
+      {/* Sign In / Sign Up Modal */}
+      {/* ----------------------------------------------------------------- */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowAuthModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-lg font-bold"
+            >
+              ✕
+            </button>
+            <h2 className="text-xl font-bold text-slate-900 mb-1">
+              {authMode === 'signup' ? 'Create an Account' : 'Welcome Back'}
+            </h2>
+            <p className="text-xs text-slate-500 mb-6">
+              {authMode === 'signup'
+                ? 'Sign up to retain scan history and buy more tokens.'
+                : 'Sign in to access your saved resume evaluations.'}
+            </p>
+
+            {authError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg">
+                {authError}
+              </div>
+            )}
+
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Email</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Password</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 rounded-lg text-sm transition disabled:opacity-50"
+              >
+                {authLoading ? 'Processing...' : authMode === 'signup' ? 'Create Account' : 'Sign In'}
+              </button>
+            </form>
+
+            <div className="mt-4 text-center text-xs text-slate-500">
+              {authMode === 'signup' ? (
+                <span>
+                  Already have an account?{' '}
+                  <button
+                    onClick={() => {
+                      setAuthMode('login');
+                      setAuthError('');
+                    }}
+                    className="text-emerald-600 font-semibold hover:underline"
+                  >
+                    Sign In
+                  </button>
+                </span>
+              ) : (
+                <span>
+                  Don't have an account?{' '}
+                  <button
+                    onClick={() => {
+                      setAuthMode('signup');
+                      setAuthError('');
+                    }}
+                    className="text-emerald-600 font-semibold hover:underline"
+                  >
+                    Sign Up
+                  </button>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------------------- */}
+      {/* Upgrade / Token Packages Modal */}
+      {/* ----------------------------------------------------------------- */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowUpgradeModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-lg font-bold"
+            >
+              ✕
+            </button>
+            <h2 className="text-xl font-bold text-slate-900 mb-1">Upgrade / Buy Tokens</h2>
+            <p className="text-xs text-slate-500 mb-6">
+              Get additional scans and AI tailored feedback for your job applications.
+            </p>
+
+            <div className="space-y-3">
+              <div className="p-4 border border-emerald-200 bg-emerald-50/50 rounded-xl flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Starter Pack</h3>
+                  <p className="text-xs text-slate-500">20 Resume ATS Scans</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-base font-black text-emerald-700">₹99</span>
+                  <button
+                    onClick={() => alert('Razorpay payment integration triggered for 20 tokens.')}
+                    className="block text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-1.5 rounded-lg mt-1 transition"
+                  >
+                    Buy Pack
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 border border-slate-200 bg-slate-50 rounded-xl flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Pro Pack</h3>
+                  <p className="text-xs text-slate-500">100 Resume ATS Scans</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-base font-black text-slate-800">₹299</span>
+                  <button
+                    onClick={() => alert('Razorpay payment integration triggered for 100 tokens.')}
+                    className="block text-xs bg-slate-900 hover:bg-slate-800 text-white font-semibold px-3 py-1.5 rounded-lg mt-1 transition"
+                  >
+                    Buy Pack
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
