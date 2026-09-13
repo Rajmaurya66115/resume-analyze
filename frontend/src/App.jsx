@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function App() {
   const [file, setFile] = useState(null);
@@ -33,6 +33,8 @@ export default function App() {
   const [contactMessage, setContactMessage] = useState('');
   const [contactLoading, setContactLoading] = useState(false);
   const [contactStatus, setContactStatus] = useState(null);
+
+  const googleButtonRef = useRef(null);
 
   // 1. Device Identifier
   const getDeviceId = () => {
@@ -102,28 +104,58 @@ export default function App() {
       fetchHistory();
     };
 
-    /* GitHub OAuth Callback Handler Commented Out
-    const urlParams = new URLSearchParams(window.location.search);
-    const githubCode = urlParams.get('code');
-    if (githubCode) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-      handleGithubCodeExchange(githubCode);
-    } else {
-      restoreSession();
-    }
-    */
-
     restoreSession();
   }, []);
 
-  // 5. Auth Handlers (Signup / Login / Logout / Forgot Password)
+  // 5. Handle Google Sign-In via official renderButton (Avoids FedCM duplicate errors)
+  const handleGoogleCredentialResponse = async (response) => {
+    try {
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify({ credential: response.credential }),
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        localStorage.setItem('token', data.token);
+        setUser(data.user);
+        if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
+        setShowAuthModal(false);
+        fetchTokens();
+        fetchHistory();
+      } else {
+        setAuthError(data.message || 'Google login failed');
+      }
+    } catch (err) {
+      setAuthError('Google sign in error: ' + err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (showAuthModal && !isForgotPassword && window.google && googleButtonRef.current) {
+      window.google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '915640228399-YOUR_CLIENT_ID.apps.googleusercontent.com',
+        callback: handleGoogleCredentialResponse,
+      });
+
+      googleButtonRef.current.innerHTML = '';
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'outline',
+        size: 'large',
+        width: 320,
+        text: 'continue_with',
+        shape: 'rectangular',
+      });
+    }
+  }, [showAuthModal, isForgotPassword]);
+
+  // 6. Auth Handlers (Signup / Login / Logout / Forgot Password)
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthError('');
     setAuthSuccessMsg('');
     setAuthLoading(true);
 
-    // If in Forgot Password Mode
     if (isForgotPassword) {
       try {
         const res = await fetch('/api/auth/forgot-password', {
@@ -183,75 +215,7 @@ export default function App() {
     fetchHistory();
   };
 
-  // Google OAuth Login
-  const handleGoogleLogin = () => {
-    if (window.google && window.google.accounts) {
-      window.google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID || '915640228399-YOUR_CLIENT_ID.apps.googleusercontent.com',
-        callback: async (response) => {
-          try {
-            const res = await fetch('/api/auth/google', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', ...getHeaders() },
-              body: JSON.stringify({ credential: response.credential }),
-            });
-            const data = await res.json();
-            if (res.ok && data.token) {
-              localStorage.setItem('token', data.token);
-              setUser(data.user);
-              if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
-              setShowAuthModal(false);
-              fetchTokens();
-              fetchHistory();
-            } else {
-              setAuthError(data.message || 'Google login failed');
-            }
-          } catch (err) {
-            setAuthError('Google sign in error: ' + err.message);
-          }
-        },
-      });
-      window.google.accounts.id.prompt();
-    } else {
-      alert('Google Sign-In SDK is loading. Please check your network connection.');
-    }
-  };
-
-  /* GitHub OAuth Logic Commented Out
-  const handleGithubLogin = () => {
-    const clientId = import.meta.env.VITE_GITHUB_CLIENT_ID || '';
-    if (!clientId) {
-      alert('VITE_GITHUB_CLIENT_ID is not configured in frontend environment variables.');
-      return;
-    }
-    const redirectUri = encodeURIComponent(window.location.origin);
-    window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
-  };
-
-  const handleGithubCodeExchange = async (code) => {
-    try {
-      const res = await fetch('/api/auth/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getHeaders() },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json();
-      if (res.ok && data.token) {
-        localStorage.setItem('token', data.token);
-        setUser(data.user);
-        if (typeof data.user.tokenBalance === 'number') setTokens(data.user.tokenBalance);
-        fetchTokens();
-        fetchHistory();
-      } else {
-        alert(data.message || 'GitHub login failed');
-      }
-    } catch (err) {
-      alert('GitHub exchange failed: ' + err.message);
-    }
-  };
-  */
-
-  // 6. Three-Tier Upgrade / Purchase Handler (Matches backend planKey)
+  // 7. Three-Tier Upgrade / Purchase Handler
   const handleBuyPlan = async (planKey) => {
     if (!user) {
       alert('Please sign in or create an account before purchasing a plan.');
@@ -272,7 +236,7 @@ export default function App() {
       if (!res.ok) throw new Error(data.message || 'Failed to initialize payment');
 
       if (data.isMock) {
-        const verifyRes = await fetch('/api/purchase/verify-payment', {
+        await fetch('/api/purchase/verify-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...getHeaders() },
           body: JSON.stringify({
@@ -325,7 +289,7 @@ export default function App() {
     }
   };
 
-  // 7. Contact Support Handler
+  // 8. Contact Support Handler
   const handleContactSubmit = async (e) => {
     e.preventDefault();
     setContactStatus(null);
@@ -366,7 +330,7 @@ export default function App() {
     }
   };
 
-  // 8. Scan Submission Handler
+  // 9. Scan Submission Handler
   const handleAnalyze = async (e) => {
     e.preventDefault();
     if (!file) {
@@ -432,7 +396,6 @@ export default function App() {
               <span>{user ? `Account (${tokens} Scans)` : `Guest Mode (${tokens} Free)`}</span>
             </div>
 
-            {/* Contact Support Button */}
             <button
               type="button"
               onClick={() => {
@@ -677,23 +640,11 @@ export default function App() {
               </div>
             )}
 
-            {/* Social Logins (Only shown on Login/Signup, not during Reset) */}
+            {/* Google Sign-In Official Mount Container */}
             {!isForgotPassword && (
               <>
-                <div className="space-y-2.5 mb-5">
-                  <button
-                    type="button"
-                    onClick={handleGoogleLogin}
-                    className="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-lg text-xs font-semibold text-slate-700 transition"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
-                      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24Z" />
-                      <path fill="#FBBC05" d="M5.28 14.27a7.195 7.195 0 0 1 0-4.54V6.58H1.25a11.97 11.97 0 0 0 0 10.84l4.03-3.15Z" />
-                      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98Z" />
-                    </svg>
-                    Continue with Google
-                  </button>
+                <div className="flex justify-center mb-5">
+                  <div ref={googleButtonRef} className="w-full flex justify-center"></div>
                 </div>
 
                 <div className="relative flex items-center justify-center mb-5">

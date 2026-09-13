@@ -2,22 +2,17 @@ const nodemailer = require('nodemailer');
 
 const getTransporter = () => {
   const user = (process.env.EMAIL_USER || '').trim();
-  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, ''); // Removes spaces from Google 16-char App Passwords
+  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
 
   if (!user || !pass) {
-    console.warn('[Mailer Warning]: EMAIL_USER or EMAIL_PASS not configured in environment variables.');
+    throw new Error('EMAIL_USER or EMAIL_PASS environment variable is missing.');
   }
 
   return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT || '587'),
-    secure: false, // Port 587 uses STARTTLS
+    service: 'gmail',
     auth: {
       user: user,
       pass: pass,
-    },
-    tls: {
-      rejectUnauthorized: false,
     },
   });
 };
@@ -28,7 +23,7 @@ const sendContactEmails = async ({ name, email, subject, message }) => {
   const adminEmail = (process.env.ADMIN_EMAIL || process.env.EMAIL_USER || '').trim();
 
   const adminMailOptions = {
-    from: `"ResumeReview Support" <${process.env.EMAIL_USER}>`,
+    from: `"ResumeReview System" <${process.env.EMAIL_USER}>`,
     to: adminEmail,
     subject: `[New Inquiry] ${subject || 'Customer Query'} from ${name || email}`,
     html: `
@@ -49,7 +44,7 @@ const sendContactEmails = async ({ name, email, subject, message }) => {
   const customerMailOptions = {
     from: `"ResumeReview Support" <${process.env.EMAIL_USER}>`,
     to: email,
-    subject: `We've received your request: ${subject || 'Support Inquiry'}`,
+    subject: `We've received your inquiry: ${subject || 'Support Request'}`,
     html: `
       <div style="font-family: sans-serif; line-height: 1.5; color: #1e293b; max-width: 550px;">
         <h2 style="color: #0f766e;">Thank You for Reaching Out!</h2>
