@@ -8,6 +8,7 @@ const connectDB = require('./db');
 const authRoutes = require('./routes/auth');
 const analyzeRoutes = require('./routes/analyze');
 const purchaseRoutes = require('./routes/purchase');
+const contactRoutes = require('./routes/contact');
 
 const app = express();
 
@@ -87,6 +88,7 @@ const apiLimiter = rateLimit({
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/analyze', apiLimiter, analyzeRoutes);
 app.use('/api/purchase', purchaseRoutes);
+app.use('/api/contact', contactRoutes);
 
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });

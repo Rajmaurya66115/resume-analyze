@@ -44,14 +44,21 @@ router.get('/tokens', attachDevice, optionalAuth, async (req, res) => {
       });
     }
 
-    if (req.device) {
-      return res.status(200).json({
-        type: 'guest',
-        tokens: req.device.freeTokensRemaining(),
+    const effectiveDeviceHash = req.deviceHash || req.headers['x-device-id'] || 'dev_guest';
+    let device = await Device.findOne({ deviceHash: effectiveDeviceHash });
+
+    if (!device) {
+      device = await Device.create({
+        deviceHash: effectiveDeviceHash,
+        freeTokensGranted: 10,
+        freeTokensUsed: 0,
       });
     }
 
-    return res.status(200).json({ type: 'guest', tokens: 10 });
+    return res.status(200).json({
+      type: 'guest',
+      tokens: device.freeTokensRemaining(),
+    });
   } catch (err) {
     console.error('[Tokens Sync Error]:', err.message);
     return res.status(500).json({ error: 'Failed to fetch tokens', tokens: 0 });
@@ -74,9 +81,12 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
       return res.status(400).json({ message: 'Job description is required.' });
     }
 
+    const effectiveDeviceHash = req.deviceHash || req.headers['x-device-id'] || 'dev_guest';
+
     // 1. Check user / guest tokens & active unlimited status
     let user = null;
     let isUnlimitedActive = false;
+    let deviceDoc = null;
 
     if (req.user) {
       user = await User.findById(req.user._id);
@@ -94,9 +104,17 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
           });
         }
       }
-    } else if (req.device) {
-      const remaining = req.device.freeTokensRemaining();
-      if (remaining <= 0) {
+    } else {
+      deviceDoc = await Device.findOne({ deviceHash: effectiveDeviceHash });
+      if (!deviceDoc) {
+        deviceDoc = await Device.create({
+          deviceHash: effectiveDeviceHash,
+          freeTokensGranted: 10,
+          freeTokensUsed: 0,
+        });
+      }
+
+      if (deviceDoc.freeTokensRemaining() <= 0) {
         return res.status(402).json({
           error: 'guest_limit_reached',
           message: 'Free guest tokens exhausted. Please sign up for an account.',
@@ -136,11 +154,9 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
     const matchRatio = uniqueJdKeywords.length > 0 ? matchedKeywords.length / uniqueJdKeywords.length : 0.75;
     const overallScore = Math.min(96, Math.max(50, Math.round(matchRatio * 100)));
 
-    const effectiveDeviceHash = req.deviceHash || req.device?.deviceHash || 'guest-session-token';
-
-    // 4. Atomic Token Deduction matching Device.js schema fields
+    // 4. Token Deduction Guaranteed to Save
     let tokenWasDeducted = false;
-    let remainingTokensOutput = null;
+    let remainingTokensOutput = 10;
 
     if (user && !isUnlimitedActive) {
       const updatedUser = await User.findOneAndUpdate(
@@ -161,49 +177,41 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
       remainingTokensOutput = user.tokenBalance;
       tokenWasDeducted = true;
 
-      TokenTransaction.create({
+      await TokenTransaction.create({
         userId: user._id,
         deviceHash: effectiveDeviceHash,
         type: 'deduct',
         amount: -1,
         reason: `resume_analysis_${req.file.originalname}`,
       }).catch((e) => console.warn('[Tx Log Error]:', e.message));
-    } else if (req.device) {
-      const updatedDevice = await Device.findOneAndUpdate(
-        {
-          _id: req.device._id,
-          $expr: { $lt: ['$freeTokensUsed', '$freeTokensGranted'] },
-        },
-        { $inc: { freeTokensUsed: 1 } },
-        { new: true }
-      );
+    } else if (deviceDoc) {
+      deviceDoc.freeTokensUsed += 1;
+      await deviceDoc.save();
 
-      if (!updatedDevice) {
-        return res.status(402).json({
-          error: 'guest_limit_reached',
-          message: 'Free guest tokens exhausted. Please sign up for an account.',
-        });
-      }
-
-      remainingTokensOutput = updatedDevice.freeTokensRemaining();
+      remainingTokensOutput = deviceDoc.freeTokensRemaining();
       tokenWasDeducted = true;
     }
 
-    // 5. Record analysis history
-    AnalysisHistory.create({
-      userId: user ? user._id : null,
-      deviceHash: effectiveDeviceHash,
-      fileName: req.file.originalname,
-      status: 'success',
-      tokenDeducted: tokenWasDeducted,
-      score: overallScore,
-      feedback: {
-        strengths: matchedKeywords.slice(0, 5),
-        weakPoints: missingKeywords.slice(0, 5),
-        missingSkills: missingKeywords.slice(0, 6),
-        improvementTips: ['Tailor resume bullet points with more quantifiable outcomes.'],
-      },
-    }).catch((e) => console.warn('[History Error]:', e.message));
+    // 5. Explicitly await history write so Vercel does not terminate early
+    try {
+      await AnalysisHistory.create({
+        userId: user ? user._id : null,
+        deviceHash: effectiveDeviceHash,
+        fileName: req.file.originalname,
+        status: 'success',
+        tokenDeducted: tokenWasDeducted,
+        score: overallScore,
+        feedback: {
+          strengths: matchedKeywords.slice(0, 5),
+          weakPoints: missingKeywords.slice(0, 5),
+          missingSkills: missingKeywords.slice(0, 6),
+          improvementTips: ['Tailor resume bullet points with more quantifiable outcomes.'],
+        },
+      });
+      console.log('[Analyze] History record persisted for device:', effectiveDeviceHash);
+    } catch (histErr) {
+      console.error('[History Save Error]:', histErr.message);
+    }
 
     console.log('[Analyze] Success! Score:', overallScore, 'Remaining tokens:', remainingTokensOutput);
 
@@ -235,20 +243,18 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
 // -------------------------------------------------------------
 router.get('/history', attachDevice, optionalAuth, async (req, res) => {
   try {
+    const effectiveDeviceHash = req.deviceHash || req.headers['x-device-id'] || 'dev_guest';
+
     const filter = req.user
       ? { userId: req.user._id }
-      : { deviceHash: req.deviceHash || req.device?.deviceHash };
-
-    if (!filter.userId && !filter.deviceHash) {
-      return res.status(200).json({ success: true, history: [] });
-    }
+      : { deviceHash: effectiveDeviceHash };
 
     const history = await AnalysisHistory.find(filter)
       .sort({ createdAt: -1 })
       .limit(10)
       .select('fileName score status tokenDeducted createdAt feedback');
 
-    return res.status(200).json({ success: true, history });
+    return res.status(200).json({ success: true, history: history || [] });
   } catch (err) {
     console.error('[History Fetch Error]:', err.message);
     return res.status(500).json({ error: 'Failed to retrieve scan history' });
