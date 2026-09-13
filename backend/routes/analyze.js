@@ -30,6 +30,37 @@ async function extractTextFromPDF(buffer) {
   }
 }
 
+// -------------------------------------------------------------
+// GET /api/analyze/tokens: Syncs frontend token badge with DB
+// -------------------------------------------------------------
+router.get('/tokens', attachDevice, optionalAuth, async (req, res) => {
+  try {
+    if (req.user) {
+      const user = await User.findById(req.user._id);
+      return res.status(200).json({
+        type: 'user',
+        tokens: user ? user.tokenBalance : 0,
+        plan: user ? user.plan : 'free',
+      });
+    }
+
+    if (req.device) {
+      return res.status(200).json({
+        type: 'guest',
+        tokens: req.device.freeTokensRemaining(),
+      });
+    }
+
+    return res.status(200).json({ type: 'guest', tokens: 10 });
+  } catch (err) {
+    console.error('[Tokens Sync Error]:', err.message);
+    return res.status(500).json({ error: 'Failed to fetch tokens', tokens: 0 });
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/analyze: Resume scanning & atomic token deduction
+// -------------------------------------------------------------
 router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req, res) => {
   try {
     console.log('[Analyze] Incoming request received for file:', req.file?.originalname);
@@ -107,8 +138,9 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
 
     const effectiveDeviceHash = req.deviceHash || req.device?.deviceHash || 'guest-session-token';
 
-    // 4. Atomic Token Deduction (Guards against race conditions)
+    // 4. Atomic Token Deduction matching Device.js schema fields
     let tokenWasDeducted = false;
+    let remainingTokensOutput = null;
 
     if (user && !isUnlimitedActive) {
       const updatedUser = await User.findOneAndUpdate(
@@ -126,6 +158,7 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
       }
 
       user.tokenBalance = updatedUser.tokenBalance;
+      remainingTokensOutput = user.tokenBalance;
       tokenWasDeducted = true;
 
       TokenTransaction.create({
@@ -137,8 +170,11 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
       }).catch((e) => console.warn('[Tx Log Error]:', e.message));
     } else if (req.device) {
       const updatedDevice = await Device.findOneAndUpdate(
-        { _id: req.device._id, usedFreeTokens: { $lt: req.device.freeTierAllocation || 10 } },
-        { $inc: { usedFreeTokens: 1 } },
+        {
+          _id: req.device._id,
+          $expr: { $lt: ['$freeTokensUsed', '$freeTokensGranted'] },
+        },
+        { $inc: { freeTokensUsed: 1 } },
         { new: true }
       );
 
@@ -149,6 +185,7 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
         });
       }
 
+      remainingTokensOutput = updatedDevice.freeTokensRemaining();
       tokenWasDeducted = true;
     }
 
@@ -168,13 +205,13 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
       },
     }).catch((e) => console.warn('[History Error]:', e.message));
 
-    console.log('[Analyze] Success! Score:', overallScore, 'Remaining user tokens:', user?.tokenBalance);
+    console.log('[Analyze] Success! Score:', overallScore, 'Remaining tokens:', remainingTokensOutput);
 
     // 6. Return response
     return res.status(200).json({
       score: overallScore,
       overallScore,
-      remainingTokens: user ? user.tokenBalance : null,
+      remainingTokens: remainingTokensOutput,
       categories: {
         keywordMatch: Math.min(100, Math.round(overallScore * 0.95)),
         experienceFit: Math.min(100, Math.round(overallScore * 0.88)),
@@ -193,7 +230,9 @@ router.post('/', upload.single('resume'), attachDevice, optionalAuth, async (req
   }
 });
 
-// Route: GET /api/analyze/history
+// -------------------------------------------------------------
+// GET /api/analyze/history: Return user or guest device scans
+// -------------------------------------------------------------
 router.get('/history', attachDevice, optionalAuth, async (req, res) => {
   try {
     const filter = req.user
